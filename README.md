@@ -67,12 +67,57 @@ npm run dev
 | 数据抽样 | `datasample` | 抽样方案 | 方案编号、数据源、抽样方式 |
 | 采集告警 | `alertpolicy` | 告警策略 | 策略编号、监控指标、触发条件 |
 
+## 重试队列数据流
+
+重试链路跨「重试队列 → 结果记录 → 网页执行侧（渲染任务）→ 抓取作业」四个位置，
+状态只在 `backend/app/services/retryqueue.py` 里流转：
+
+```text
+草稿 ──加入队列──> 等待重试 ──发起重试──> 重试中 ──重试成功──> 重试成功 ─┐
+                                            │                          │
+                                            └──标记最终失败──> 最终失败 ─┴─重新加入队列─> 等待重试
+```
+
+- 只有「重试中」能收敛为「重试成功」或「最终失败」；加入队列 / 发起重试不会跨级直达终态。
+- 退避级别到上限（5）后，下一次发起重试在同一步内收敛为最终失败。
+- 每次状态变化追加一条尝试记录 `retryattempt`，可按条目回溯；`重试结果 retryresult`
+  每个尝试一条，迟到的旧尝试或终态后的相反回调最多再保留一份「版本冲突」结果。
+- 同一重试结果连续提交只生效一次；并发回调共用 `store.lock`，只留一个终态。
+- 最终失败清单 `finalfailure` 与成功结果按失败URL互斥；`POST /api/retryqueue/resync`
+  或 `POST /api/rendertask/sync` 会把结果回写到网页执行侧失败URL集合与抓取作业清单。
+
+主要接口：
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/retryqueue` | 按条目编号/失败URL/状态/作业编号分页筛选 |
+| `GET /api/retryqueue/stats` | 条目总数、等待重试、重试成功率、数据集规模 |
+| `GET /api/retryqueue/{id}` | 条目明细（含尝试记录与重试结果） |
+| `GET /api/retryqueue/{id}/attempts` | 单条目尝试记录，回溯每次状态变化 |
+| `GET /api/retryqueue/results` | 重试结果数据集（含冲突版本） |
+| `GET /api/retryqueue/final-failures` | 最终失败清单 |
+| `POST /api/retryqueue/bulk` | 一批失败URL整组提交，逐条返回尝试与最终处置 |
+| `POST /api/retryqueue/drain` | 并发执行重试队列，同一条目只推进一次 |
+| `POST /api/retryqueue/{id}/actions` | 状态动作，可带 `attempt` / `result_id` 做幂等与迟到判定 |
+| `GET /api/rendertask/failures` | 网页执行侧失败URL集合 |
+| `GET /api/rendertask/retry-results` | 网页执行侧读取重试结果 |
+| `POST /api/rendertask/sync` | 把重试结果同步到网页执行侧清单与作业清单 |
+
+## 测试
+
+```bash
+cd backend
+.venv/bin/python -m unittest discover -s tests -v
+```
+
 ## 约定
 
-- 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在
+- 每个模块的前端页面在 `frontend/src/views/<模块>/index.tsx`，后端接口在
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
-- 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
+- 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message, entry }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 动作接口的请求体是 `{ "values": { "action": "..." } }`；静态路由（如 `/export`、
+  `/stats`）必须注册在 `/{entry_id}` 之前。
 
 领域：数据工程
 子方向：数据采集、爬虫与RPA

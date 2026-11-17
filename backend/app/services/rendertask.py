@@ -33,6 +33,23 @@ class RendertaskService:
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
 
+    def list_failures(self) -> list[dict[str, Any]]:
+        """网页执行侧的失败URL集合：每个渲染作业一行，展开成逐URL的记录。"""
+        rows: list[dict[str, Any]] = []
+        for job in store.rows(MODULE):
+            retry_state = job.get("重试状态") or ""
+            for url in job.get("失败URL集合") or []:
+                rows.append({
+                    "渲染作业ID": job.get("id"),
+                    "作业编号": job.get("作业编号"),
+                    "目标URL": url,
+                    "失败URL": url,
+                    "重试状态": retry_state,
+                    "最近失败原因码": job.get("最近失败原因码", ""),
+                    "同步版本": job.get("同步版本", 0),
+                })
+        return rows
+
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
         missing = [field for field in REQUIRED_FIELDS if not str(values.get(field) or "").strip()]
         if missing:
@@ -40,6 +57,10 @@ class RendertaskService:
         rows = store.rows(MODULE)
         entry = {"id": max((int(row.get("id", 0)) for row in rows), default=0) + 1}
         entry.update({field: values.get(field) for field in REQUIRED_FIELDS})
+        entry["失败URL集合"] = [str(url) for url in (values.get("失败URL集合") or []) if str(url or "").strip()]
+        entry["失败URL数"] = len(entry["失败URL集合"])
+        entry["重试状态"] = str(values.get("重试状态") or "")
+        entry["同步版本"] = int(values.get("同步版本") or 0)
         entry["status"] = STATUS_ORDER[0]
         entry["pending"] = True
         entry["abnormal"] = False

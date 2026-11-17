@@ -19,6 +19,18 @@ class ActionResult(BaseModel):
     ok: bool
     message: str
     entry: dict[str, Any] | None = None
+    items: list[dict[str, Any]] | None = None
+    summary: dict[str, Any] | None = None
+
+
+class BulkRetryPayload(BaseModel):
+    """一批失败URL整组提交重试：逐条返回尝试次数与最终处置。"""
+
+    urls: list[str] = Field(default_factory=list)
+    reason: str = ""
+    job: str = ""
+    auto_retry: bool = False
+    remark: str | None = None
 
 
 class EntryPayload(BaseModel):
